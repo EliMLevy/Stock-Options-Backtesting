@@ -31,7 +31,8 @@ def backtest(params):
         result[strategy["name"]] = dict()
         logs = []
         y_axis = []
-        portfolio = Portfolio(params["starting balance"])
+        portfolio = Portfolio(params["starting balance"], percent_spy, percent_hedge)
+        
 
         print("Beginging processing for strategy: " + strategy["name"])
 
@@ -92,34 +93,23 @@ def backtest(params):
                 if params["verbose"]:
                     logs.append("Rebalancing...")
 
-                # Liquidate any assets that we own
+                # Liquidate assets to rebalance portfolio
                 result = portfolio.rebalance(strategy["SPY"], strategy["hedge"])
-                val = portfolio.sell_asset("SPY")
                 if params["verbose"]:
-                    logs.append("SELLing stock for " + str(val))
-                val = portfolio.sell_asset("hedge")
-                if params["verbose"]:
-                    logs.append("SELLing hedge for " + str(new_hedge_price))
+                    logs.append(result)
 
-                # Rebalance the allocation of SPY in the portfolio
-                portfolio.allocated_for_stock = portfolio.cash * strategy["SPY"]
-
-                # Initialize the fragmentation for this period and allocate for hedge
-                portfolio.liquid_hedge["segments"] = strategy["hedge fragmentation"]
-                portfolio.liquid_hedge["total value"] = portfolio.cash * strategy["hedge"]
-                portfolio.slice_liquid_hedge()
-
+                # Spend allocated cash on respective assets
                 if params["verbose"]:
                     logs.append("SPY allocation: " + str(portfolio.allocated_for_stock))
                     logs.append("Hedge allocation: " + str(portfolio.allocated_for_hedge))
 
-                # Spend the allocated cash for the respective assets
-                # SPY
                 stocks_quantity = math.floor(portfolio.allocated_for_stock / float(stocks_cost))
-                portfolio.buy_asset("SPY", stocks_cost, stocks_quantity, stock=True)
+                portfolio.buy_stock(stocks_cost, stocks_quantity)
                 if params["verbose"]:
                     logs.append("BUYing " + str(stocks_quantity) + " stock's for $" + str(stocks_cost))
-                # Hedge
+
+                portfolio.hedge_fragments = strategy["hedge fragmentation"]
+                hedge_budget = portfolio.slice_liquid_hedge()
                 target_contract = grand_selector(
                     today_data,
                     "P",
@@ -127,7 +117,12 @@ def backtest(params):
                     current + timedelta(days=strategy["expiry"])
                 )
                 put_cost = bid_ask_mean(target_contract) * 100
-                hedge_quantity = math.floor(portfolio.allocated_for_hedge / put_cost)
+                hedge_quantity = math.floor( hedge_budget / put_cost)
+
+
+                # Spend the allocated cash for the respective assets
+                # SPY
+                # Hedge
                 portfolio.buy_asset("hedge", put_cost, hedge_quantity, data=target_contract, hedge=True)
                 if params["verbose"]:
                     logs.append("BUYing " + str(hedge_quantity) + " contracts of " + str(target_contract["expiration"]) + ", " + str(target_contract["strike"]) + " for $" + str(put_cost))
