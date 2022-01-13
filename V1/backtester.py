@@ -3,79 +3,7 @@ import pandas as pd
 from datetime import (timedelta, datetime)
 from functions import (grand_selector, bid_ask_mean, select_contract, update_hedge_info)
 import math
-
-
-
-
-
-class Portfolio:
-    def __init__(self, bal):
-        self.bal = bal
-        self.assets = 0
-        self.holdings = dict()
-        self.liquid_hedge = {
-            "segments":0,
-            "total value":0,
-        }
-
-    def update_holding(self, holding, price, data=None):
-        if holding in self.holdings:
-            profit = price - self.holdings[holding]["price"]
-            self.assets += profit * self.holdings[holding]["quantity"]
-            self.holdings[holding]["price"] = price
-            self.holdings[holding]["data"] = data
-            
-
-    def buy_asset(self, name, price, quantity, data=dict()):
-        self.bal -= price * quantity
-        self.assets += price * quantity
-        self.holdings[name] = {
-            "name": name,
-            "price": price,
-            "quantity": quantity
-        }
-        self.holdings[name]["data"] = data
-
-    def sell_asset(self, name):
-        if name in self.holdings:
-            value = self.holdings[name]["price"] * \
-                self.holdings[name]["quantity"]
-            self.bal += value
-            self.assets -= value
-            self.holdings.pop(name)
-            return value
-        else:
-            return -1
-
-    def get_holding_info(self, name):
-        if name in self.holdings:
-            return self.holdings[name]
-        else:
-            return None
-
-    def slice_liquid_hedge(self):
-        return_slice = self.liquid_hedge["total value"] / self.liquid_hedge["segments"]
-        self.liquid_hedge["total value"] -= return_slice
-        self.liquid_hedge["segments"] -= 1
-
-        if self.liquid_hedge["total value"] < 0 or self.liquid_hedge["segments"] < 0:
-            raise Exception("Fragmentation fault")
-
-        return return_slice
-
-    def __str__(self):
-        output = "Portfolio:\n"
-        for holding in self.holdings:
-            output += ">>" + str(self.holdings[holding]["name"]) + "<<\n"
-            output += "  price: " + str(self.holdings[holding]["price"]) + "\n"
-            output += "  quantity: " + \
-                str(self.holdings[holding]["quantity"]) + "\n"
-            output += "  value: " + \
-                str(self.holdings[holding]["quantity"] * self.holdings[holding]["price"]) + "\n"
-        output += "Cash: " + str(self.bal) + "\n"
-        output += "Assets: " + str(self.assets)
-
-        return output
+from Portfolio import Portfolio
 
 
 def load_data(start, end):
@@ -97,80 +25,101 @@ def backtest(params):
     result = dict()
     # Load in the dataset
     data = load_data(params["start"], params["end"])
+
     # Process one strategy at a time
     for strategy in params["strategies"]:
-        result[strategy["name"]] = dict();
+        result[strategy["name"]] = dict()
         logs = []
-        portfolio = Portfolio(params["starting balance"])
         y_axis = []
+        portfolio = Portfolio(params["starting balance"])
 
         print("Beginging processing for strategy: " + strategy["name"])
 
-        # set a timer to renew the contracts (min(rollover, expiry))
-        # set a timer to rebalance the % of stock and % of option
+        # There are three actions that our portfolio takes:
+        #  1) Rebalance 
+        #       -Selling enough SPY to regain X%
+        #       -Buying hedge with the money we got from the sale
+        #  3) Allocate more cash to the portfolio's hedge 
+        #       -The portfolio manages what money is allocated to hedge/SPY
+        #        and what money is reserved to be allocated to hedge
+        #  2) Rollover a hedge 
+        #       -The portfolio manages a queue of contracts which have rollover dates
+        #       -If the head of the queue is ready to be rolled over then
+        #       -sell all contracts ready to be roll over
+        #       -Use the money from the sale and any hedge allocated money to buy more hedge
+        # We initialize these to 0 because the portfolio needs to 
+        # take these actions immediately
         rebalancing_in = 0
-        rolling_over_in = 0
-        frag_timer = 0
-
-        # hedge_annual_budget = params["starting balance"] * strategy["hedge"]
+        hedge_frag_in = 0
 
         for current in tqdm(pd.date_range(start=params["start"],end=params["end"])):
-            # print(str(current.date()))
             # Grab todays data
             if str(current.date()) in data:
                 today_data = data[str(current.date())]
             else:
-                # print("skipping " + str(current.date()))
-                # logs.append("skipping " + str(current.date()))
+                # The dataset is missing this day (weekend, holiday, or deliquency)
+                # Push the timers down by one to signal the passage of a day and 
+                # record the portfolio's value
                 rebalancing_in -= 1
-                rolling_over_in -= 1
                 frag_timer -= 1
-                y_axis.append(math.floor(portfolio.bal + portfolio.assets))
+                y_axis.append(math.floor(portfolio.cash + portfolio.assets))
                 continue
 
-            # Output day header
-            logs.append("*************\n" + str(current.date()))
+            if params["verbose"]:
+                # Output day header
+                logs.append("*************\n" + str(current.date()))
 
+
+            # Update the value of the portfolio's assets
             stocks_cost = (today_data.iloc[0]["underlying_bid_1545"] + today_data.iloc[0]["underlying_ask_1545"]) / 2
-
             portfolio.update_holding("SPY", stocks_cost)
 
-            new_hedge_price = update_hedge_info(today_data, portfolio)
+            new_hedge_prices = update_hedge_info(today_data, portfolio)
+            if params["verbose"]:
+                logs.append("SPY cost update: " + str(stocks_cost))
+                logs.append("Hedge cost update: " + str(new_hedge_prices))
+                logs.append("Portfolio cash: " + str(portfolio.cash) + " assets: " + str(portfolio.assets))
 
-            logs.append("SPY cost update: " + str(stocks_cost))
-            logs.append("Hedge cost update: " + str(new_hedge_price))
-            logs.append("Portfolio cash: " + str(portfolio.bal) + " assets: " + str(portfolio.assets))
-
-            if portfolio.bal + portfolio.assets < 40000:
+            # Protect against erroneous data
+            if portfolio.cash + portfolio.assets < 40000:
                 print(current.date())
 
-            y_axis.append(math.floor(portfolio.bal + portfolio.assets))
+            # Record the new value of the portfolio
+            y_axis.append(math.floor(portfolio.cash + portfolio.assets))
 
+            # If its time to rebalance
             if rebalancing_in <= 0:
-                logs.append("Rebalancing...")
+                if params["verbose"]:
+                    logs.append("Rebalancing...")
 
-                # update stock and put cost
-                # stocks_cost = data["SPYStock"][data["SPYStock"]["Date"] == current.strftime("%m/%d/%Y")].iloc[0]["Close/Last"]
-                portfolio.update_holding("SPY", stocks_cost)
-
-                new_hedge_price = update_hedge_info(today_data, portfolio)
-
-                # Sell any SPY and Hedge that we own
+                # Liquidate any assets that we own
+                result = portfolio.rebalance(strategy["SPY"], strategy["hedge"])
                 val = portfolio.sell_asset("SPY")
-                logs.append("SELLing stock for " + str(val))
+                if params["verbose"]:
+                    logs.append("SELLing stock for " + str(val))
                 val = portfolio.sell_asset("hedge")
-                logs.append("SELLing hedge for " + str(new_hedge_price))
+                if params["verbose"]:
+                    logs.append("SELLing hedge for " + str(new_hedge_price))
 
-                # Update the money dedicated to hedge for the rebalancing period
+                # Rebalance the allocation of SPY in the portfolio
+                portfolio.allocated_for_stock = portfolio.cash * strategy["SPY"]
+
+                # Initialize the fragmentation for this period and allocate for hedge
                 portfolio.liquid_hedge["segments"] = strategy["hedge fragmentation"]
-                portfolio.liquid_hedge["total value"] = portfolio.bal * strategy["hedge"]
+                portfolio.liquid_hedge["total value"] = portfolio.cash * strategy["hedge"]
+                portfolio.slice_liquid_hedge()
 
-                # buy SPY% of balanace stocks
-                stocks_budget = portfolio.bal * strategy["SPY"]
-                stocks_quantity = math.floor(stocks_budget / float(stocks_cost))
-                portfolio.buy_asset("SPY", stocks_cost, stocks_quantity)
-                logs.append("BUYing " + str(stocks_quantity) + " stock's for $" + str(stocks_cost))
-                # buy hedge% of balance puts
+                if params["verbose"]:
+                    logs.append("SPY allocation: " + str(portfolio.allocated_for_stock))
+                    logs.append("Hedge allocation: " + str(portfolio.allocated_for_hedge))
+
+                # Spend the allocated cash for the respective assets
+                # SPY
+                stocks_quantity = math.floor(portfolio.allocated_for_stock / float(stocks_cost))
+                portfolio.buy_asset("SPY", stocks_cost, stocks_quantity, stock=True)
+                if params["verbose"]:
+                    logs.append("BUYing " + str(stocks_quantity) + " stock's for $" + str(stocks_cost))
+                # Hedge
                 target_contract = grand_selector(
                     today_data,
                     "P",
@@ -178,54 +127,58 @@ def backtest(params):
                     current + timedelta(days=strategy["expiry"])
                 )
                 put_cost = bid_ask_mean(target_contract) * 100
-                # hedge_budget = hedge_annual_budget / strategy["hedge fragmentation"]
-                hedge_budget = portfolio.slice_liquid_hedge()
-
-                hedge_quantity = math.floor(hedge_budget / put_cost)
-                portfolio.buy_asset("hedge", put_cost, hedge_quantity, data=target_contract)
-                logs.append("BUYing " + str(hedge_quantity) + " contracts of " + str(target_contract["expiration"]) + ", " + str(target_contract["strike"]) + " for $" + str(put_cost))
+                hedge_quantity = math.floor(portfolio.allocated_for_hedge / put_cost)
+                portfolio.buy_asset("hedge", put_cost, hedge_quantity, data=target_contract, hedge=True)
+                if params["verbose"]:
+                    logs.append("BUYing " + str(hedge_quantity) + " contracts of " + str(target_contract["expiration"]) + ", " + str(target_contract["strike"]) + " for $" + str(put_cost))
 
                 # Reset rebalancing timer
                 rebalancing_in = strategy["rebalancing period"]
                 # Reset the rollover timer
-                rolling_over_in = strategy["rollover"]
+                rolling_over_in = min(strategy["rollover"], strategy["expiry"])
                 # Reset fragmentation timer
                 frag_timer = math.floor(strategy["rebalancing period"] / strategy["hedge fragmentation"])
 
+            
+            # Time to allocate more cash to hedge 
+            if frag_timer <= 0:
+                portfolio.slice_liquid_hedge()
+                frag_timer = math.floor(strategy["rebalancing period"] / strategy["hedge fragmentation"])
+                if params["verbose"]:
+                    logs.append("Allocating another slice to hedge. Currently: " + str(portfolio.allocated_for_hedge))
+
+            
+            
+            """
             elif rolling_over_in <= 0:
-                logs.append("Rolling over...")
+                if params["verbose"]:
+                    logs.append("Rolling over...")
+
                 # Update hedge price
                 new_hedge_price = update_hedge_info(today_data, portfolio)
 
                 # Sell hedge
-                hedge_budget = portfolio.sell_asset("hedge")
-                logs.append("SELLing hedge for " + str(new_hedge_price))
-                if frag_timer <= 0: # if its time to add money to hedge budget
-                    logs.append("Frag timer is " + str(frag_timer))
-                    new_slice = 0
-                    new_slice += portfolio.slice_liquid_hedge()
-                    # We may have missed some framents so add up all the missed ones
-                    while frag_timer <= 0:
-                        new_slice += portfolio.slice_liquid_hedge()
-                        frag_timer += math.floor(strategy["rebalancing period"] / strategy["hedge fragmentation"])
-                        logs.append(">>" + str(frag_timer) + ": " + str(new_slice))
-
-                    hedge_budget += new_slice
-                    logs.append("adding " + str(new_slice) + " to hedge budget")
-                # Buy hedge again with money made from sale
+                portfolio.sell_asset("hedge", hedge=True)
+                if params["verbose"]:
+                    logs.append("SELLing hedge for " + str(new_hedge_price))
+                
+                # Buy hedge with portfolio's allocated cash
                 target_contract = grand_selector(
                     today_data,
                     "P",
                     strategy["target delta"],
-                    current +timedelta(days=strategy["expiry"])
+                    current + timedelta(days=strategy["expiry"])
                 )
                 put_cost = bid_ask_mean(target_contract) * 100
-                hedge_quantity = math.floor(hedge_budget / put_cost)
-                portfolio.buy_asset("hedge", put_cost, hedge_quantity, data=target_contract)
-                logs.append("BUYing " + str(hedge_quantity) + " contracts of " + str(target_contract["expiration"]) + ", " + str(target_contract["strike"]) + " for $" + str(put_cost))
+                hedge_quantity = math.floor(portfolio.allocated_for_hedge / put_cost)
+                portfolio.buy_asset("hedge", put_cost, hedge_quantity, data=target_contract, hedge=True)
+                if params["verbose"]:
+                    logs.append("BUYing " + str(hedge_quantity) + " contracts of " + str(target_contract["expiration"]) + ", " + str(target_contract["strike"]) + " for $" + str(put_cost))
 
                 # reset rollover timer
-                rolling_over_in = strategy["rollover"]
+                rolling_over_in = min(strategy["rollover"], strategy["expiry"])
+            
+            """
             else:                
                 rebalancing_in -= 1
                 rolling_over_in -= 1
