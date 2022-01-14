@@ -31,11 +31,13 @@ def select_contract(df, c_type, expiration, strike):
 def update_hedge_info(data, portfolio):
     result = dict()
     for contract in portfolio.hedge_queue:
-        current_info = portfolio.get_holding_info(contract["name"])["data"]
-        updated_info = select_contract(data, "P", current_info["expiration"], current_info["strike"])
+        current_info = portfolio.get_holding_info(contract["name"])
+        expiration = current_info["data"]["expiration"]
+        strike = current_info["data"]["strike"]
+        updated_info = select_contract(data, "P",expiration, strike)
         new_price = bid_ask_mean(updated_info) * 100
         portfolio.update_holding(contract["name"], new_price, data=updated_info)
-        result[contract["name"]] = str(bid_ask_mean(current_info) * 100) + " ==> " + str(new_price)
+        result[contract["name"]] = str(current_info["price"])  + " ==> " + str(new_price)
 
     return result
 
