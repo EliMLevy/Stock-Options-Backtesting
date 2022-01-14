@@ -1,5 +1,6 @@
 from collections import deque
 import json 
+import math
 
 
 class Portfolio:
@@ -26,8 +27,8 @@ class Portfolio:
         self.holdings = dict()
         self.allocated_for_stock = self.cash * percent_spy
         self.allocated_for_hedge = self.cash * percent_hedge
-        self.hedge_fragments = 1
-        self.reserved_for_hedge = self.allocated_for_hedge
+        self.hedge_fragments = 0
+        self.reserved_for_hedge = 0
         self.hedge_queue = deque()
 
 
@@ -43,7 +44,7 @@ class Portfolio:
         self.cash -= cost
         self.assets += cost
         self.holdings["SPY"] = {
-            "name": name,
+            "name": "SPY",
             "price": price,
             "quantity": quantity
         }
@@ -62,6 +63,9 @@ class Portfolio:
         }
         self.allocated_for_hedge -= cost
         self.hedge_queue.append({"date":rollover_date, "name":name})
+
+
+    
 
     def sell_asset(self, holding_name, quantity):
         if holding_name in self.holdings:
@@ -101,78 +105,149 @@ class Portfolio:
 
         return new_slice
 
-    def rebalance(percent_spy, percent_hedge, rollover_date, verbose=False):
+    def rebalance(self, percent_spy, percent_hedge, verbose=True):
         logs = []
         # Calculate portfolio value (cash + assets)
         portfolio_value = self.cash + self.assets
         # Calculate desired and actual SPY value
         desired_SPY = portfolio_value * percent_spy
-        actual_SPY = get_holding_val("SPY") + self.allocated_for_SPY
-        # If val of SPY + allocated to SPY is LESS than desired
-        if actual_SPY < desired_SPY:
-            if verbose:
-                logs.append("Too little SPY")
-            descrepency = desired_SPY - actual_SPY
-            # 1) check if we have enough liquidity allocated to hedge to rebalance
-            if descrepency <= self.allocated_for_hedge:
-                self.allocated_for_SPY += descrepency
-                self.allocated_for_hedge -= descrepency
-                if verbose:
-                    logs.append("Reallocation from liquid hedge")
-            # 2) start selling hedge
-            else:
-                self.allocated_for_SPY += self.allocated_for_hedge
-                self.allocated_for_hedge = 0
-                # Start selling assets to rebalance
-                while len(self.hedge_queue) > 0:
-                    # Reevaluate the descrepency
-                    actual_SPY = get_holding_val("SPY") + self.allocated_for_SPY
-                    descrepency = desired_SPY - actual_SPY
-                    # Find the next contract
-                    next_contract = self.hedge_queue[0]["name"]
-                    # if its value is less then the descrepency
-                    next_contract_val = get_holding_val(next_contract)
-                    if next_contract_val < descrepency:
-                        if verbose:
-                            logs.append("Liquidating position: " + str(next_contract) + " for $" + str(next_contract_val))
-                        # sell it all and repeat
-                        self.hedge_queue.popLeft()
-                        self.allocated_for_SPY += sell_asset(next_contract, "ALL")
-                    else:
-                        shares_to_sell = max(0, math.floor(descrepency / self.holdings[next_contract]["price"]))
-                        self.allocated_for_SPY += sell_asset(next_contract, shares_to_sell)
-                        if verbose:
-                            logs.append("Liquidating " + str(shares_to_sell) + " shares of " + str(next_contract))
-                        break
-        elif actual_SPY > desired_SPY:
+        # actual_SPY = self.holdings["SPY"]["price"] * self.holdings["SPY"]["quantity"] + self.allocated_for_stock
+        actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
+
+        # If val of SPY is too big
+        if actual_SPY > desired_SPY:
+            # sell SPY till it is back to 98%, 
+            # allocate funds to hedge, 
+            # use 1/frag to buy puts
+
+            descrepency = actual_SPY - desired_SPY
             if verbose:
                 logs.append("Too much SPY")
-            descrepency = actual_SPY - desired_SPY
             # 1) If the liquid allocation can rebalance
-            if descrepency <= self.allocated_for_SPY:
+            if descrepency <= self.allocated_for_stock:
                 self.allocated_for_hedge += descrepency
-                self.allocated_for_SPY -= descrepency
+                self.allocated_for_stock -= descrepency
                 if verbose:
                     logs.append("Reallocation from liquid SPY")
-            # 2) start selling SPY
+            # 2) Start selling SPY shares
             else:
-                self.allocated_for_SPY += self.allocated_for_hedge
-                self.allocated_for_hedge = 0
+                self.allocated_for_hedge += self.allocated_for_stock
+                self.allocated_for_stock = 0
                 # Calc descrepency
-                # shares to sell = math.ceil(descrepency / price)
-                # descrepency goes to alloc_hedge and remainder goes to SPY_alloc
-                actual_SPY = get_holding_val("SPY") + self.allocated_for_SPY
+                actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
                 descrepency = actual_SPY - desired_SPY
+                # shares to sell = math.ceil(descrepency / price)
                 SPY_price = self.holdings["SPY"]["price"]
                 shares_to_sell = max(0, math.ceil(descrepency / SPY_price))
-                liquid = sell_asset("SPY", shares_to_sell)
+                # descrepency goes to alloc_hedge and remainder goes to SPY_alloc
+                liquid = self.sell_asset("SPY", shares_to_sell)
                 self.allocated_for_hedge += descrepency
-                self.allocated_for_SPY += (liquid - descrepency)
+                self.allocated_for_stock += (liquid - descrepency)
                 if verbose:
                     logs.append("Selling " + str(shares_to_sell) + " shares of SPY for " + str(liquid))
+            # At this point the value of SPY holdings+allocated_SPY = correct percentage
+            # and same for hedge. 
+            # TODO sell puts till we have 1/frags 
         else:
             if verbose:
-                logs.append("Perfectly Balanced!")
+                logs.append("Too little SPY")
+                logs.append("Desired: " + str(desired_SPY) + " actual: " + str(actual_SPY))
+            descrepency = desired_SPY - actual_SPY
+            #  sell Puts till we have 1/frag of 2% in puts, 
+            # allocate funds to SPY till it reaches 98%, 
+            # allocate remainder to hedge.
+
+            # go through puts, selling till you reach desired value of puts
+            # allocate new liquid to SPY
+            self.allocated_for_hedge += self.reserved_for_hedge
+            self.reserved_for_hedge = 0
+            # 1) If we have enough liquid hedge to reblanace
+            if descrepency <= self.allocated_for_hedge:
+                self.allocated_for_stock += descrepency
+                self.allocated_for_hedge -= descrepency
+                if verbose:
+                    logs.append("Reallocation from liquid hedge bc descrepency was " + str(descrepency))
+            # 2) Start selling hedge
+            else:
+                self.allocated_for_stock += self.allocated_for_hedge
+                self.allocated_for_hedge = 0
+                logs.append("Allocated for stock = " + str(self.allocated_for_stock))
+                # values of puts = assets - actual_SPY 
+                actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
+                portfolio_val = (self.assets + self.cash)
+                val_of_puts = portfolio_val - actual_SPY
+                # desired val of puts = % * (portfolio_val) / fragments
+                desired_val_of_puts = (percent_hedge * portfolio_value)
+
+                for put_position in self.hedge_queue:
+                    # if money is larger than descrepency, divy it up, otherwise allocae to SPY
+                    actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
+                    portfolio_val = (self.assets + self.cash)
+                    val_of_puts = portfolio_val - actual_SPY
+                    descrepency = val_of_puts - desired_val_of_puts
+                    if verbose:
+                        logs.append("Portfolio: " + str(portfolio_val))
+                        logs.append("Actual SPY: " + str(actual_SPY))
+                        logs.append("val_of_puts: " + str(val_of_puts))
+                        logs.append("desired_val_of_puts: " + str(desired_val_of_puts))
+                        logs.append("descrepency: " + str(descrepency))
+
+                    # Sell next position
+                    liquid = self.sell_asset(put_position["name"], "ALL")
+                    if verbose:
+                        logs.append("Selling " + str(put_position["name"]) + " for $" + str(liquid))
+                    if liquid > descrepency:
+                        self.allocated_for_stock += descrepency 
+                        self.allocated_for_hedge += (liquid - descrepency)
+                        if verbose:
+                            logs.append("Alocating $" + str(liquid - descrepency) + " to hedge and $" + str(descrepency ) + " to stock")
+                        # We have finished
+                        break
+                    else:
+                        self.allocated_for_stock += liquid
+            
+            # Before we conclude we must sell more puts such that we are below the 
+            # amount for the first fragement of the rebalancing period
+            if verbose:
+                logs.append("Final stage, selling puts")
+            actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
+            portfolio_val = (self.assets + self.cash)
+            total_puts_val = percent_hedge * portfolio_val
+            nonliquid_puts_val = (portfolio_val - actual_SPY) - self.allocated_for_hedge
+            desired_nonliquid_puts_val = total_puts_val / self.hedge_fragments
+            # If we are holding positions whose value is less than the fragment for this period 
+            # it is easy to move liquidity to reserves
+            if nonliquid_puts_val <= desired_nonliquid_puts_val:
+                # A we need to do is put the liquid cash into reserved and
+                # leave enough for this period
+                excess = desired_nonliquid_puts_val - nonliquid_puts_val
+                self.reserved_for_hedge += self.allocated_for_hedge - excess
+                self.allocated_for_hedge = excess
+            # If we dont have enough liquidity to move to reserves we must liquidate puts
+            else:
+                for put_position in self.hedge_queue:
+                    liquid = self.sell_asset(put_position["name"], "ALL")
+                    
+                    actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
+                    portfolio_val = (self.assets + self.cash)
+                    total_puts_val = percent_hedge * portfolio_val
+                    nonliquid_puts_val = (portfolio_val - actual_SPY) - self.allocated_for_hedge
+                    desired_nonliquid_puts_val = total_puts_val / self.hedge_fragments
+
+                    # sell the next position
+
+                    # If this liquidity is enough to 
+
+
+        if verbose:
+            portfolio_val = self.cash + self.assets
+            stocks_val = self.get_holding_val("SPY")
+            stocks_liquid = self.allocated_for_stock
+            puts_val = self.assets - stocks_val
+            puts_liquid = self.allocated_for_hedge
+            logs.append("Finished with: Portfolio="+str(portfolio_val) + "; SPY stock=" + str(stocks_val) + " liquid=" + str(stocks_liquid) + "; hedge stock=" + str(puts_val) + " liquid=" + str(puts_liquid))
+            logs.append("Perfectly Balanced!")
+       
         return "\n".join(logs)
 
 
@@ -181,5 +256,10 @@ class Portfolio:
         output["cash"] = self.cash
         output["assets"] = self.assets
         output["holdings"] = self.holdings
+        output["Allocated Cash"] = {
+            "SPY": self.allocated_for_stock,
+            "hedge": self.allocated_for_hedge
+
+        }
 
         return json.dumps(output, indent = 4) 
