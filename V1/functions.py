@@ -4,12 +4,11 @@ def grand_selector(df, c_type, delta, expiry):
     sorted = correct_type_delta_and_expiration.sort_values(
         by=["expiration", "delta_1545"])
     if len(sorted) < 1:
-        print(df)
+        # print(df)
+        # print(df["quote_date"].iloc[0],c_type, delta, expiry)
         raise ValueError("Could not find contract with delta range")
 
     result = sorted.iloc[0]
-    if result["underlying_symbol"] != "SPY":
-        raise Exception("Wrong underlying")
     return result
 
 

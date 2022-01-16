@@ -43,11 +43,14 @@ class Portfolio:
         cost = price * quantity
         self.cash -= cost
         self.assets += cost
-        self.holdings["SPY"] = {
-            "name": "SPY",
-            "price": price,
-            "quantity": quantity
-        }
+        if "SPY" in self.holdings:
+            self.holdings["SPY"]["quantity"] += quantity
+        else:
+            self.holdings["SPY"] = {
+                "name": "SPY",
+                "price": price,
+                "quantity": quantity
+            }
         self.allocated_for_stock -= cost
 
     def buy_puts(self, name, price, quantity, data, rollover_date):
@@ -108,36 +111,37 @@ class Portfolio:
 
     def rebalance(self, percent_spy, percent_hedge, verbose=False):
         logs = []
+        self.check_invariants()
         # Calculate portfolio value (cash + assets)
         portfolio_value = self.cash + self.assets
         # Calculate desired and actual SPY value
         desired_SPY = portfolio_value * percent_spy
-        # actual_SPY = self.holdings["SPY"]["price"] * self.holdings["SPY"]["quantity"] + self.allocated_for_stock
         actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
 
         # If val of SPY is too big
         if actual_SPY > desired_SPY:
-            # sell SPY till it is back to 98%, 
-            # allocate funds to hedge, 
-            # use 1/frag to buy puts
-
-            descrepency = actual_SPY - desired_SPY
             if verbose:
                 logs.append("Too much SPY")
+            descrepency = actual_SPY - desired_SPY
             # 1) If the liquid allocation can rebalance
             if descrepency <= self.allocated_for_stock:
                 self.allocated_for_hedge += descrepency
                 self.allocated_for_stock -= descrepency
                 if verbose:
                     logs.append("Reallocation from liquid SPY")
+                self.check_invariants()
+                
             # 2) Start selling SPY shares
             else:
+                # Get rid of any cash reserved for spy before we start selling
                 self.allocated_for_hedge += self.allocated_for_stock
                 self.allocated_for_stock = 0
+                self.check_invariants()
+
                 # Calc descrepency
                 actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
                 descrepency = actual_SPY - desired_SPY
-                # shares to sell = math.ceil(descrepency / price)
+                # shares to sell = math.ceil(descrepency / price) or 0 (if the descrepency became a negative)
                 SPY_price = self.holdings["SPY"]["price"]
                 shares_to_sell = max(0, math.ceil(descrepency / SPY_price))
                 # descrepency goes to alloc_hedge and remainder goes to SPY_alloc
@@ -146,20 +150,14 @@ class Portfolio:
                 self.allocated_for_stock += (liquid - descrepency)
                 if verbose:
                     logs.append("Selling " + str(shares_to_sell) + " shares of SPY for " + str(liquid))
-            # At this point the value of SPY holdings+allocated_SPY = correct percentage
-            # and same for hedge. 
-            # TODO sell puts till we have 1/frags 
+                
+                self.check_invariants()
+
         else:
             if verbose:
                 logs.append("Too little SPY")
-                logs.append("Desired: " + str(desired_SPY) + " actual: " + str(actual_SPY))
             descrepency = desired_SPY - actual_SPY
-            #  sell Puts till we have 1/frag of 2% in puts, 
-            # allocate funds to SPY till it reaches 98%, 
-            # allocate remainder to hedge.
-
-            # go through puts, selling till you reach desired value of puts
-            # allocate new liquid to SPY
+            # get rid of any reserves (it will be replaced at the end of rebalancing)
             self.allocated_for_hedge += self.reserved_for_hedge
             self.reserved_for_hedge = 0
             # 1) If we have enough liquid hedge to reblanace
@@ -167,38 +165,30 @@ class Portfolio:
                 self.allocated_for_stock += descrepency
                 self.allocated_for_hedge -= descrepency
                 if verbose:
-                    logs.append("Reallocation from liquid hedge bc descrepency was " + str(descrepency))
+                    logs.append("Reallocation from liquid hedge")
             # 2) Start selling hedge
             else:
+                # Get rid of any cash allocated for hedge before we start selling
                 self.allocated_for_stock += self.allocated_for_hedge
                 self.allocated_for_hedge = 0
-                logs.append("Allocated for stock = " + str(self.allocated_for_stock))
-                # values of puts = assets - actual_SPY 
+
                 actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
-                portfolio_val = (self.assets + self.cash)
-                val_of_puts = portfolio_val - actual_SPY
-                # desired val of puts = % * (portfolio_val) / fragments
+                val_of_puts = portfolio_value - actual_SPY
+                # desired val of puts = % * (portfolio_val) (deal with fragments later)
                 desired_val_of_puts = (percent_hedge * portfolio_value)
-
-                count = 0
-                for put_position in self.hedge_queue:
-                    # if money is larger than descrepency, divy it up, otherwise allocae to SPY
+                # As we sell, we need to remove them from queue buy
+                while len(self.hedge_queue) > 0:
+                    current_contract = self.hedge_queue.popleft()
                     actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
-                    portfolio_val = (self.assets + self.cash)
-                    val_of_puts = portfolio_val - actual_SPY
+                    val_of_puts = portfolio_value - actual_SPY
                     descrepency = val_of_puts - desired_val_of_puts
+                    # Sell the current contract
+                    liquid = self.sell_asset(current_contract["name"], "ALL")
                     if verbose:
-                        logs.append("Portfolio: " + str(portfolio_val))
-                        logs.append("Actual SPY: " + str(actual_SPY))
-                        logs.append("val_of_puts: " + str(val_of_puts))
-                        logs.append("desired_val_of_puts: " + str(desired_val_of_puts))
-                        logs.append("descrepency: " + str(descrepency))
-
-                    # Sell next position
-                    liquid = self.sell_asset(put_position["name"], "ALL")
-                    count += 1
-                    if verbose:
-                        logs.append("Selling " + str(put_position["name"]) + " for $" + str(liquid))
+                        logs.append("Selling " + str(current_contract["name"]) + " for $" + str(liquid))
+                    # If this sale is enough to cover descrepency, then move the amount of the descrepency
+                    # to the allocated for stock and the remainder remains with hedge. Otherwise, move it
+                    # all to stock
                     if liquid > descrepency:
                         self.allocated_for_stock += descrepency 
                         self.allocated_for_hedge += (liquid - descrepency)
@@ -208,38 +198,39 @@ class Portfolio:
                         break
                     else:
                         self.allocated_for_stock += liquid
-                for i in range(count):
-                    self.hedge_queue.popleft()
-            
+
+        self.check_invariants()
+
+        
         # Before we conclude we must sell more puts such that we are below the 
         # amount for the first fragement of the rebalancing period
         if verbose:
             logs.append("Final stage, selling puts")
         # 1) find the correct amount of non-liquidity
         actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
-        portfolio_val = (self.assets + self.cash)
-        desired_nonliquid_puts_val = (percent_hedge * (portfolio_val)) / self.hedge_fragments
-        actual_nonliquid_puts_val = (portfolio_val - actual_SPY) - self.allocated_for_hedge
+
+        desired_nonliquid_puts_val = (percent_hedge * (portfolio_value)) / self.hedge_fragments
+        actual_nonliquid_puts_val = (portfolio_value - actual_SPY) - self.allocated_for_hedge
         if desired_nonliquid_puts_val < actual_nonliquid_puts_val:
             if verbose:
                 logs.append("Too much nonliquidity desired=" + str(desired_nonliquid_puts_val) + " actual=" + str(actual_nonliquid_puts_val))
-            count = 0
-            for put_position in self.hedge_queue:
-                # 2) sell a put and move the cash to put liquidity
-                liquid = self.sell_asset(put_position["name"], "ALL")
-                count += 1
+            while len(self.hedge_queue) > 0:
+                current_contract = self.hedge_queue.popleft()
+                # 2) sell current put and move the cash to put liquidity
+                liquid = self.sell_asset(current_contract["name"], "ALL")
                 if verbose:
-                    logs.append("Selling " + str(put_position["name"]) + " for $" + str(liquid))
+                    logs.append("Selling " + str(current_contract["name"]) + " for $" + str(liquid))
                 self.allocated_for_hedge += liquid
-                actual_nonliquid_puts_val = (portfolio_val - actual_SPY) - self.allocated_for_hedge
+                actual_nonliquid_puts_val = (portfolio_value - actual_SPY) - self.allocated_for_hedge
                 # 3) compare out non-liquidity to correect non-liquidity
                 if desired_nonliquid_puts_val >= actual_nonliquid_puts_val:
                     break
-            for i in range(count):
-                self.hedge_queue.popleft()
+        
+        self.check_invariants()
+
         # Lastly, we need to move enough cash to hedge reserves
         # 1) Caluculate how much belongs in reserves
-        desired_cash_in_reserves = ((percent_hedge * portfolio_val) / self.hedge_fragments) * (self.hedge_fragments - 1)
+        desired_cash_in_reserves = ((percent_hedge * portfolio_value) / self.hedge_fragments) * (self.hedge_fragments - 1)
         if verbose:
             logs.append("Moving " + str(desired_cash_in_reserves) + " from allocated to reserved")
         # 2) move that much
@@ -247,15 +238,16 @@ class Portfolio:
         self.allocated_for_hedge -= desired_cash_in_reserves
 
         if verbose:
-            portfolio_val = self.cash + self.assets
+            portfolio_value = self.cash + self.assets
             stocks_val = self.get_holding_val("SPY")
             stocks_liquid = self.allocated_for_stock
             puts_val = self.assets - stocks_val
             puts_liquid = self.allocated_for_hedge
             puts_reserved = self.reserved_for_hedge
-            logs.append("Finished with: Portfolio="+str(portfolio_val) + "; SPY stock=" + str(stocks_val) + " liquid=" + str(stocks_liquid) + "; hedge stock=" + str(puts_val) + " liquid=" + str(puts_liquid) + " reserved=" + str(puts_reserved))
+            logs.append("Finished with: Portfolio="+str(portfolio_value) + "; SPY stock=" + str(stocks_val) + " liquid=" + str(stocks_liquid) + "; hedge stock=" + str(puts_val) + " liquid=" + str(puts_liquid) + " reserved=" + str(puts_reserved))
             logs.append("Perfectly Balanced!")
        
+        self.check_invariants()
         return "\n".join(logs)
 
 
@@ -270,4 +262,17 @@ class Portfolio:
 
         }
 
-        return json.dumps(output, indent = 4) 
+        return str(output)
+
+
+    def check_invariants(self):
+        # 1)
+        assets = 0
+        for name in self.holdings:
+            holding = self.holdings[name]
+            assets += (holding["price"] * holding["quantity"])
+        assert abs(round(assets, 1) - round(self.assets, 1)) < 1, "Portfolio assets are " + str(self.assets) + " however sum of assets is " + str(assets) + "\n" + str(self) 
+
+        # 2)
+        allocated = self.allocated_for_hedge + self.allocated_for_stock + self.reserved_for_hedge
+        assert round(self.cash, 3) == round(allocated, 3), "Portfolio cash is " + str(self.cash) + " however allocated cash is " + str(allocated) + "\n" + str(self)
