@@ -1,82 +1,50 @@
-from backtester import backtest
+from backtester import (backtest, load_data)
 import datetime
 import grapher
+import json
 
+file = open("./simpleParams.json")
+strategies = json.load(file)
 
-params = {
-    "start": datetime.datetime(2007, 1, 10),
-    "end": datetime.datetime(2010, 12, 31),
-    "starting balance": 100000,  # dollars
-    "strategies": [
-        {
-            "name": "Crash90_10No_Frag",
-            "SPY": 0.9,  # percent
-            "hedge": 0.1,  # percent
-            "rebalancing period": 365,  # day
-            "target delta": [-0.03, -0.01],
-            "slippage": 0,  # gap between the bid and the ask. Not important for SPY
-            "commision": 0,
-            "expiry": 60,  # days
-            "rollover": 30,  # days
-            "trade frequency": 7,  # days
-            "hedge fragmentation": 1,
-        },
-        {
-            "name": "Crash95_5",
-            "SPY": 0.95,  # percent
-            "hedge": 0.05,  # percent
-            "rebalancing period": 365,  # day
-            "target delta": [-0.03, -0.01],
-            "slippage": 0,  # gap between the bid and the ask. Not important for SPY
-            "commision": 0,
-            "expiry": 60,  # days
-            "rollover": 30,  # days
-            "trade frequency": 7,  # days
-            "hedge fragmentation": 1,
-        },
-        {
-            "name": "Crash85_15",
-            "SPY": 0.85,  # percent
-            "hedge": 0.15,  # percent
-            "rebalancing period": 365,  # day
-            "target delta": [-0.03, -0.01],
-            "slippage": 0,  # gap between the bid and the ask. Not important for SPY
-            "commision": 0,
-            "expiry": 60,  # days
-            "rollover": 30,  # days
-            "trade frequency": 7,  # days
-            "hedge fragmentation": 1,
-        },
-        {
-            "name": "Crash75_25",
-            "SPY": 0.75,  # percent
-            "hedge": 0.25,  # percent
-            "rebalancing period": 365,  # day
-            "target delta": [-0.03, -0.01],
-            "slippage": 0,  # gap between the bid and the ask. Not important for SPY
-            "commision": 0,
-            "expiry": 60,  # days
-            "rollover": 30,  # days
-            "trade frequency": 7,  # days
-            "hedge fragmentation": 1,
-        },
-    ],
-    "verbose": False
-
+no_hedge_strategy = {
+    "name": "No_Hedge",
+    "SPY": 1,   
+    "hedge": 0,   
+    "rebalancing period": 365,   
+    "target delta": [-0.03, -0.01],
+    "slippage": 0,   
+    "commision": 0,
+    "expiry": 120,   
+    "rollover": 60,   
+    "trade frequency": 7,   
+    "hedge fragmentation": 1
 }
 
 
 def main():
-    output = backtest(params)
-    for strategy in params["strategies"]:
+    params = {
+        "start": datetime.datetime(2005, 1, 10),
+        "end": datetime.datetime(2021, 1, 10),
+        "starting balance": 100000, 
+        "strategy": no_hedge_strategy,
+        "verbose": True
+    }
+
+    # Load in data
+    data = load_data(params["start"], params["end"])
+    # Run with no hedge
+    no_hedge_data = backtest(params, data)
+    # Overlay no hedge on strategies
+    for strategy in strategies:
+        params["strategy"] = strategy
+        output = backtest(params, data)
         name = strategy["name"]
-        # print(output[name])
-        grapher.make_graph(params["start"], params["end"], output[name]["y axis"], name)
-        # file = open("./sim_data/"+ name + ".txt", "w")
-        # file.write("\n".join(output[name]["logs"]))
-        # file.write("\n\n")
-        # file.write(str(output[name]["y axis"]))
-        # file.close()
+        grapher.make_graph(params["start"], params["end"], output[name]["y axis"], name, no_hedge_data["No_Hedge"]["y axis"])
+        file = open("./output/"+ name + ".json", "w")
+        file.write(json.dumps(output[name]["stats"]))
+        file.write("\n".join(output[name]["logs"]))
+        file.close()
+
 
 
 if __name__ == "__main__":

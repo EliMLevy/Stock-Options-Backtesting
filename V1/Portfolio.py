@@ -111,6 +111,10 @@ class Portfolio:
 
     def rebalance(self, percent_spy, percent_hedge, verbose=False):
         logs = []
+        stats = {
+            "# of SPY trades": 0,
+            "# of put trades": 0
+        }
         self.check_invariants()
         # Calculate portfolio value (cash + assets)
         portfolio_value = self.cash + self.assets
@@ -146,6 +150,7 @@ class Portfolio:
                 shares_to_sell = max(0, math.ceil(descrepency / SPY_price))
                 # descrepency goes to alloc_hedge and remainder goes to SPY_alloc
                 liquid = self.sell_asset("SPY", shares_to_sell)
+                stats["# of SPY trades"] += 1
                 self.allocated_for_hedge += descrepency
                 self.allocated_for_stock += (liquid - descrepency)
                 if verbose:
@@ -184,6 +189,7 @@ class Portfolio:
                     descrepency = val_of_puts - desired_val_of_puts
                     # Sell the current contract
                     liquid = self.sell_asset(current_contract["name"], "ALL")
+                    stats["# of put trades"] += 1
                     if verbose:
                         logs.append("Selling " + str(current_contract["name"]) + " for $" + str(liquid))
                     # If this sale is enough to cover descrepency, then move the amount of the descrepency
@@ -209,7 +215,7 @@ class Portfolio:
         # 1) find the correct amount of non-liquidity
         actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
 
-        desired_nonliquid_puts_val = (percent_hedge * (portfolio_value)) / self.hedge_fragments
+        desired_nonliquid_puts_val = (percent_hedge * portfolio_value) / self.hedge_fragments
         actual_nonliquid_puts_val = (portfolio_value - actual_SPY) - self.allocated_for_hedge
         if desired_nonliquid_puts_val < actual_nonliquid_puts_val:
             if verbose:
@@ -218,6 +224,7 @@ class Portfolio:
                 current_contract = self.hedge_queue.popleft()
                 # 2) sell current put and move the cash to put liquidity
                 liquid = self.sell_asset(current_contract["name"], "ALL")
+                stats["# of put trades"] += 1
                 if verbose:
                     logs.append("Selling " + str(current_contract["name"]) + " for $" + str(liquid))
                 self.allocated_for_hedge += liquid
@@ -225,12 +232,15 @@ class Portfolio:
                 # 3) compare out non-liquidity to correect non-liquidity
                 if desired_nonliquid_puts_val >= actual_nonliquid_puts_val:
                     break
-        
         self.check_invariants()
 
         # Lastly, we need to move enough cash to hedge reserves
         # 1) Caluculate how much belongs in reserves
         desired_cash_in_reserves = ((percent_hedge * portfolio_value) / self.hedge_fragments) * (self.hedge_fragments - 1)
+        assert abs((portfolio_value * percent_hedge) - (desired_cash_in_reserves + desired_nonliquid_puts_val)) < 1, "pv: " + str(portfolio_value) + "; ph:" + str(percent_hedge) + "; r:" + str(desired_cash_in_reserves) + "; pr:" + str(desired_nonliquid_puts_val)  
+        
+        assert desired_cash_in_reserves <= self.allocated_for_hedge, "Desired: " + str(desired_cash_in_reserves) + " cash: " + str(self.allocated_for_hedge) + "\n" + str(self)
+        
         if verbose:
             logs.append("Moving " + str(desired_cash_in_reserves) + " from allocated to reserved")
         # 2) move that much
@@ -248,7 +258,7 @@ class Portfolio:
             logs.append("Perfectly Balanced!")
        
         self.check_invariants()
-        return "\n".join(logs)
+        return ["\n".join(logs), stats]
 
 
     def __str__(self):
@@ -266,13 +276,31 @@ class Portfolio:
 
 
     def check_invariants(self):
-        # 1)
+        # 1) Assets should sum to self.assets
         assets = 0
         for name in self.holdings:
             holding = self.holdings[name]
             assets += (holding["price"] * holding["quantity"])
         assert abs(round(assets, 1) - round(self.assets, 1)) < 1, "Portfolio assets are " + str(self.assets) + " however sum of assets is " + str(assets) + "\n" + str(self) 
 
-        # 2)
+        # 2) allocated cash should sum to cash
         allocated = self.allocated_for_hedge + self.allocated_for_stock + self.reserved_for_hedge
         assert round(self.cash, 3) == round(allocated, 3), "Portfolio cash is " + str(self.cash) + " however allocated cash is " + str(allocated) + "\n" + str(self)
+
+        # 3) allocated should never be below zero
+        assert self.allocated_for_hedge >= 0, "Allocated to hedge is " + str(self.allocated_for_hedge)
+        assert self.allocated_for_stock >= 0, "Allocated to stock is " + str(self.allocated_for_stock)
+        assert self.reserved_for_hedge >= 0, "Reserved for hedge is " + str(self.reserved_for_hedge)
+
+        # 4) Every position in queue has a guy in holdings and vis versa
+        # TODO make this invariant
+        for put in self.hedge_queue:
+            assert put["name"] in self.holdings, str(put["name"]) + " is in queue but could not be found in holdings \n" + str(self.holdings) + "\n" + str(self.hedge_queue)
+        for holding in self.holdings:
+            if self.holdings[holding]["name"] != "SPY":
+                found = False
+                for put in self.hedge_queue:
+                    if put["name"] == self.holdings[holding]["name"]:
+                        found = True
+                
+                assert found == True, str(self.holdings[holding]["name"]) + " is in holdings but could not be found in queue \n" + str(self.holdings) + "\n" + str(self.hedge_queue)
