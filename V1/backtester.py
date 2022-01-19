@@ -162,9 +162,16 @@ def backtest(params, data):
                     put = portfolio.hedge_queue.popleft()
                     value = portfolio.sell_asset(put["name"], "ALL")
                     stats["# of put trades"] += 1
-                    portfolio.allocated_for_hedge += value
-                    if params["verbose"]:
-                        logs.append("Rolling over " + str(put["name"]) + " adding $" + str(value) + " to hedge allocation")
+                    if value > (portfolio.cash + portfolio.assets) * strategy["hedge"]:
+                        to_hedge = (portfolio.cash + portfolio.assets) * strategy["hedge"]
+                        portfolio.allocated_for_hedge += to_hedge
+                        portfolio.allocated_for_stock += value - (to_hedge)
+                        if params["verbose"]:
+                            logs.append("Rolling over " + str(put["name"]) + " adding $" + str(to_hedge) + " to hedge allocation and " + str( value - to_hedge) + " to stock")
+                    else:
+                        portfolio.allocated_for_hedge += value
+                        if params["verbose"]:
+                            logs.append("Rolling over " + str(put["name"]) + " adding $" + str(value) + " to hedge allocation")
                 else:
                     break
         

@@ -20,6 +20,9 @@ def select_contract(df, c_type, expiration, strike):
     temp = df[(df["expiration"] == expiration) & (
         df["strike"] == strike) & (df["option_type"] == c_type)  & (df["underlying_symbol"] == "SPY")]
 
+    assert len(temp) > 0, "Could not find contract: " + str(c_type) + ", " + str(expiration) + ", " + str(strike) + str(df.head(5))
+
+
     result = temp.iloc[0]
     if result["underlying_symbol"] != "SPY":
         raise Exception("Wrong underlying")
@@ -33,11 +36,13 @@ def update_hedge_info(data, portfolio):
         current_info = portfolio.get_holding_info(contract["name"])
         expiration = current_info["data"]["expiration"]
         strike = current_info["data"]["strike"]
-        updated_info = select_contract(data, "P",expiration, strike)
-        new_price = bid_ask_mean(updated_info) * 100
-        portfolio.update_holding(contract["name"], new_price, data=updated_info)
-        result[contract["name"]] = str(current_info["price"])  + " ==> " + str(new_price)
-
+        try:
+            updated_info = select_contract(data, "P",expiration, strike)
+            new_price = bid_ask_mean(updated_info) * 100
+            portfolio.update_holding(contract["name"], new_price, data=updated_info)
+            result[contract["name"]] = str(current_info["price"])  + " ==> " + str(new_price)
+        except AssertionError:
+            print("Failed to locate contract...")
     return result
 
 

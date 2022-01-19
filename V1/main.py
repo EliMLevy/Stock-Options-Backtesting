@@ -3,7 +3,7 @@ import datetime
 import grapher
 import json
 
-file = open("./simpleParams.json")
+file = open("./params.json")
 strategies = json.load(file)
 
 no_hedge_strategy = {
@@ -27,7 +27,7 @@ def main():
         "end": datetime.datetime(2021, 1, 10),
         "starting balance": 100000, 
         "strategy": no_hedge_strategy,
-        "verbose": True
+        "verbose": False
     }
 
     # Load in data
@@ -42,7 +42,7 @@ def main():
         grapher.make_graph(params["start"], params["end"], output[name]["y axis"], name, no_hedge_data["No_Hedge"]["y axis"])
         file = open("./output/"+ name + ".json", "w")
         file.write(json.dumps(output[name]["stats"]))
-        file.write("\n".join(output[name]["logs"]))
+        # file.write("\n".join(output[name]["logs"]))
         file.close()
 
 
