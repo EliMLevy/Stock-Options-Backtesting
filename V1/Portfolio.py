@@ -121,6 +121,9 @@ class Portfolio:
         # Calculate desired and actual SPY value
         desired_SPY = portfolio_value * percent_spy
         actual_SPY = self.get_holding_val("SPY") + self.allocated_for_stock
+        # get rid of any reserves (it will be replaced at the end of rebalancing)
+        self.allocated_for_hedge += self.reserved_for_hedge
+        self.reserved_for_hedge = 0
 
         # If val of SPY is too big
         if actual_SPY > desired_SPY:
@@ -162,9 +165,6 @@ class Portfolio:
             if verbose:
                 logs.append("Too little SPY")
             descrepency = desired_SPY - actual_SPY
-            # get rid of any reserves (it will be replaced at the end of rebalancing)
-            self.allocated_for_hedge += self.reserved_for_hedge
-            self.reserved_for_hedge = 0
             # 1) If we have enough liquid hedge to reblanace
             if descrepency <= self.allocated_for_hedge:
                 self.allocated_for_stock += descrepency
