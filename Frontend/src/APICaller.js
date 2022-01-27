@@ -17,7 +17,7 @@ lib["runSimulation"] = async function (params) {
     };
 
     let queryString = `start=${params["start"]}&end=${params["end"]}&name=${params["name"]}&hedge=${params["hedge"]}&rebalancing_period=${params["rebalancing_period"]}&target_delta=${params["target_delta"]}&expiry=${params["expiry"]}&rollover=${params["rollover"]}&hedge_fragmentation=${params["hedge_fragmentation"]}&trade_frequency=${params["trade_frequency"]}`;
-    let url = "localhost:8090/?";
+    let url = "http://localhost:8090/?";
     // Example queryString:
     // "start=2007-01-01
     //      &end=2010-01-01
