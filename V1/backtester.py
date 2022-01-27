@@ -32,6 +32,7 @@ def backtest(params, data):
     strategy = params["strategy"]
     logs = []
     y_axis = []
+    hedge_pl = []
     stats = {
         "# of days":0,
         "# of SPY trades": 0,
@@ -66,6 +67,7 @@ def backtest(params, data):
     """
     rebalancing_in = 0
     frag_timer = 0
+    trade_timer = 0
 
     for current in tqdm(pd.date_range(start=params["start"],end=params["end"])):
         stats["# of days"] += 1
@@ -78,33 +80,39 @@ def backtest(params, data):
             # record the portfolio's value
             rebalancing_in -= 1
             frag_timer -= 1
+            trade_timer -= 1
             y_axis.append(math.floor(portfolio.cash + portfolio.assets))
+            hedge_pl.append(round(portfolio.hedge_pl, 2))
+ 
+
             continue
 
         if params["verbose"]:
             # Output day header
             logs.append("*************\n" + str(current.date()))
 
-        portfolio.check_invariants()
+        # portfolio.check_invariants()
 
 
         # Update the value of the portfolio's assets
         stocks_cost = (today_data.iloc[0]["underlying_bid_1545"] + today_data.iloc[0]["underlying_ask_1545"]) / 2
         portfolio.update_holding("SPY", stocks_cost)
 
-        portfolio.check_invariants()
+        # portfolio.check_invariants()
 
 
         new_hedge_prices = update_hedge_info(today_data, portfolio)
+        hedge_pl.append(round(portfolio.hedge_pl, 2))
         if params["verbose"]:
             logs.append("SPY cost update: " + str(stocks_cost))
             logs.append("Hedge cost update: " + str(new_hedge_prices))
             logs.append("Portfolio cash: " + str(portfolio.cash) + " assets: " + str(portfolio.assets))
+            logs.append("SPY trades " + str(stats["# of put trades"]))
 
         # Record the new value of the portfolio
         y_axis.append(math.floor(portfolio.cash + portfolio.assets))
 
-        portfolio.check_invariants()
+        # portfolio.check_invariants()
 
         # If its time to rebalance
         if rebalancing_in <= 0:
@@ -137,9 +145,11 @@ def backtest(params, data):
             rebalancing_in = strategy["rebalancing period"]
             # Reset fragmentation timer
             frag_timer = math.floor(strategy["rebalancing period"] / strategy["hedge fragmentation"])
+            # Reset Trade timer
+            # trade_timer = strategy["trade frequency"]
 
         
-        portfolio.check_invariants()
+        # portfolio.check_invariants()
 
         # Time to allocate more cash to hedge 
         if frag_timer <= 0:
@@ -151,8 +161,7 @@ def backtest(params, data):
             if params["verbose"]:
                 logs.append("Allocating another slice to hedge. Currently: " + str(portfolio.allocated_for_hedge))
 
-        portfolio.check_invariants()
-
+        # portfolio.check_invariants()
 
         # Check for any contracts ready to rollover
         if len(portfolio.hedge_queue) > 0 and portfolio.hedge_queue[0]["date"] <= current:
@@ -175,32 +184,34 @@ def backtest(params, data):
                 else:
                     break
         
-        portfolio.check_invariants()
+        # portfolio.check_invariants()
         
-        
-        try:
-            target_contract = grand_selector(
-                today_data,
-                "P",
-                strategy["target delta"],
-                current + timedelta(days=strategy["expiry"])
-            )
-            put_cost = bid_ask_mean(target_contract) * 100
-            if put_cost == 0:
-                print(current.date())
-                raise Exception("Put cost should not be 0")
-            hedge_quantity = math.floor(portfolio.allocated_for_hedge / put_cost)
-            if hedge_quantity > 0:
-                contract_name = target_contract["expiration"] + str(target_contract["strike"]) + str(current.date())
-                portfolio.buy_puts(contract_name, put_cost, hedge_quantity, target_contract, current + timedelta(days=strategy["rollover"]))
-                stats["# of put trades"] += 1
-                stats["# of put contracts bought"] += hedge_quantity
-                if params["verbose"]:
-                    logs.append("BUYing " + str(hedge_quantity) + " contracts of " + str(target_contract["expiration"]) + ", " + str(target_contract["strike"]) + " for $" + str(put_cost))
-        except ValueError:
-            logs.append("Could not find contract to buy on: " + str(current.date()))
+        if trade_timer <= 0:
+            try:
+                target_contract = grand_selector(
+                    today_data,
+                    "P",
+                    strategy["target delta"],
+                    current + timedelta(days=strategy["expiry"])
+                )
+                put_cost = bid_ask_mean(target_contract) * 100
+                if put_cost == 0:
+                    print(current.date())
+                    raise Exception("Put cost should not be 0")
+                hedge_quantity = math.floor(portfolio.allocated_for_hedge / put_cost)
+                if hedge_quantity > 0:
+                    contract_name = target_contract["expiration"] + str(target_contract["strike"]) + str(current.date())
+                    portfolio.buy_puts(contract_name, put_cost, hedge_quantity, target_contract, current + timedelta(days=strategy["rollover"]))
+                    stats["# of put trades"] += 1
+                    stats["# of put contracts bought"] += hedge_quantity
+                    if params["verbose"]:
+                        logs.append("BUYing " + str(hedge_quantity) + " contracts of " + str(target_contract["expiration"]) + ", " + str(target_contract["strike"]) + " for $" + str(put_cost))
+            except ValueError:
+                logs.append("Could not find contract to buy on: " + str(current.date()))
+            trade_timer = strategy["trade frequency"]
         rebalancing_in -= 1
         frag_timer -= 1
+        trade_timer -= 1
 
         
         # Data collection
@@ -219,7 +230,7 @@ def backtest(params, data):
         3) no contracts on queue past rollover
         
         """
-        portfolio.check_invariants()
+        # portfolio.check_invariants()
 
         # 1)
         assets = 0
@@ -238,12 +249,15 @@ def backtest(params, data):
 
     # Final data points
     stats[ "total profit"] = y_axis[-1] - y_axis[0]
-    stats["avg. profit per day"] = stats[ "total profit"] / stats["# of days"]
+    stats["avg. profit per day"] = round(stats[ "total profit"] / stats["# of days"], 2)
+    stats["largest % drawdown"] = round(stats["largest % drawdown"], 2)
+    stats["largest % drawup"] = round(stats["largest % drawup"], 2)
 
     final_result[strategy["name"]] = {
         "logs": logs,
         "y axis": y_axis,
-        "stats": stats
+        "stats": stats,
+        "hedge pl": hedge_pl
     }
 
     return final_result
