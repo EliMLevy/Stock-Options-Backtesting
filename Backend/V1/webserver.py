@@ -58,16 +58,17 @@ class MyServer(BaseHTTPRequestHandler):
             # print(params)
             noHedge = backtestNoHedge(params, data)
             output = backtest(params, data)
-            # print(output[strategy["name"]]["y axis"])
+            # print(output["y axis"])
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             response = {
-                "stats": json.dumps(output[strategy["name"]]["stats"]),
+                "stats": output["stats"],
                 "no hedge": noHedge["y axis"],
-                "y vals":output[strategy["name"]]["y axis"],
-                "x vals": [str(n.date()) for n in pd.date_range(start=params["start"],end=params["end"])]
+                "y vals": output["y axis"],
+                "x vals": [str(n.date()) for n in pd.date_range(start=params["start"],end=params["end"])],
+                "hedge pl": output["hedge pl"]
             }
             self.wfile.write(bytes(json.dumps(response), "utf-8"))
 
@@ -105,7 +106,7 @@ class MyServer(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":  
     print("loading data...")
-    data = load_data(datetime(2005, 1, 10), datetime(2011, 1, 10))
+    data = load_data(datetime(2005, 1, 10), datetime(2021, 1, 10))
     print("data loaded.")
     webServer = HTTPServer((hostName, serverPort), MyServer)
     print("Server started http://%s:%s" % (hostName, serverPort))
