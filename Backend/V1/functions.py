@@ -1,14 +1,22 @@
 def grand_selector(df, c_type, delta, expiry):
-    correct_type_delta_and_expiration = df[(df["option_type"] == c_type) & (df["delta_1545"] >= delta[0]) & (
-        df["delta_1545"] <= delta[1]) & (df["expiration"] >= str(expiry.date())) & (df["underlying_symbol"] == "SPY")]
-    sorted = correct_type_delta_and_expiration.sort_values(
-        by=["expiration", "delta_1545"])
-    if len(sorted) < 1:
+    correct_type_delta_and_expiration = df[(df["option_type"] == c_type) & 
+                                        (df["delta_1545"] >= delta[0]) & 
+                                        (df["delta_1545"] <= delta[1]) & 
+                                        (df["expiration"] >= str(expiry.date())) & 
+                                        (df["underlying_symbol"] == "SPY") &
+                                        (df["root"] != "SPY7") & 
+                                        (df["root"] != "SPYJ") &
+                                        (df["root"] != "FYN")]
+    
+    sorted_contracts = correct_type_delta_and_expiration.sort_values(by=["strike"], ascending=False)
+    sorted_contracts = sorted_contracts.sort_values(by=["expiration"])
+    sorted_contracts = sorted_contracts.sort_values(by=["delta_1545"], ascending=False)
+    if len(sorted_contracts) < 1:
         # print(df)
         # print(df["quote_date"].iloc[0],c_type, delta, expiry)
         raise ValueError("Could not find contract with delta range")
 
-    result = sorted.iloc[0]
+    result = sorted_contracts.iloc[0]
     return result
 
 
@@ -18,7 +26,7 @@ def bid_ask_mean(contract):
 
 def select_contract(df, c_type, expiration, strike):
     temp = df[(df["expiration"] == expiration) & (
-        df["strike"] == strike) & (df["option_type"] == c_type)  & (df["underlying_symbol"] == "SPY")]
+        df["strike"] == strike) & (df["option_type"] == c_type)  & (df["underlying_symbol"] == "SPY") & (df["root"] != "FYN")]
 
     assert len(temp) > 0, "Could not find contract: " + str(c_type) + ", " + str(expiration) + ", " + str(strike) + str(df.head(5))
 
