@@ -2,7 +2,7 @@
 
 Hi there, 
 
-This is a repository of code I wrote for a freelancing job on backtesting stock options strategies. More specifically, the client wanted to know the optimal ratio between stock and hedge for a portfolio as well as the optimal parameters regarding the put contracts used for the hedge. This backtesting script allows the user to specify a start and end date for the simulation (I own a dataset of SPY stock options data, purchased from the CBOE, that goes from Jan. 2005 till Jan. 2021). The user specifies the percentage of the portfolio value that gets reserved for stock and how much for hedge. The user also specifies the length of the rebalancing period, the desired delta and expiry of the put contracts, holding period of the contract (time till rollover), trade frequency, and degree of fragmentation of the capital reserved for hedge.
+This is a repository of code I wrote for a freelancing job on backtesting stock options strategies. The client wanted to know the optimal ratio between stock and hedge for a portfolio as well as the optimal parameters regarding the put contracts used for the hedge. This backtesting script allows the user to specify a start and end date for the simulation. The user specifies the percentage of the portfolio value that gets reserved for stock and how much for hedge. The user also specifies the length of the rebalancing period, the desired delta and expiry of the put contracts, holding period of the contract (time till rollover), trade frequency, and degree of fragmentation of the capital reserved for hedge.
 
 
 ## Repository Contents
